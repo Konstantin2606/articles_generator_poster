@@ -1,3 +1,9 @@
+sites.txt
+WordPressPoster/settings/
+settings/
+sites
+*.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
