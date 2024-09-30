@@ -1,0 +1,1 @@
+# articles_generator_poster
