@@ -1,0 +1,78 @@
+QWidget {
+    font-family: Arial;
+    font-size: 14px;
+    background-color: #f0f0f0;
+}
+
+QLabel {
+    font-weight: bold;
+    color: #333;
+}
+
+QPushButton {
+    background-color: #000000;
+    color: white;
+    border: none;
+    padding: 4px 8px;  /* Уменьшаем padding для более компактных кнопок */
+    text-align: center;
+    border-radius: 4px;  /* Уменьшаем закругление углов */
+    margin: 2px 0;  /* Уменьшаем вертикальный отступ между кнопками */
+    min-height: 30px;  /* Уменьшаем минимальную высоту кнопок */
+}
+
+QPushButton:hover {
+    background-color: #808080;
+}
+
+QPushButton:pressed {
+    background-color: #606060;
+}
+
+QLineEdit, QTableWidget, QTextEdit {
+    padding: 4px;  /* Уменьшаем padding для полей ввода */
+    margin: 2px 0;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #000000;
+}
+
+QCheckBox {
+    padding: 4px;
+}
+
+QDialogButtonBox {
+    padding: 4px;
+    background-color: #f0f0f0;
+    border-top: 1px solid #ccc;
+}
+
+QMenuBar {
+    background-color: #333;
+    color: white;
+    border-bottom: 1px solid #555;
+}
+
+QMenuBar::item {
+    background: transparent;
+    padding: 5px 10px;
+}
+
+QMenuBar::item:selected {
+    background: #555;
+}
+
+QMenu {
+    background-color: #f0f0f0;
+    border: 1px solid #ccc;
+}
+
+QMenu::item:selected {
+    background-color: #808080;
+}
+
+QStatusBar {
+    background-color: #333;
+    color: white;
+    border-top: 1px solid #555;
+}

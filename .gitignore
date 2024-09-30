@@ -1,5 +1,6 @@
-sites.txt
+_doc_files/
 WordPressPoster/settings/
+ArticleGenerator/settings/
 settings/
 sites
 *.db

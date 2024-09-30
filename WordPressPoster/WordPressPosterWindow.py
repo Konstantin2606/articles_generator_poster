@@ -5,7 +5,7 @@ import asyncio
 import logging
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox, QPlainTextEdit)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from WordPressPoster import WordPressPoster  # Импортируем класс WordPressPoster
+from WordPressPoster import WordPressPoster  # Импортируем класс WordPressPoster.
 
 class WordPressPosterThread(QThread):
     finished = pyqtSignal()
@@ -267,8 +267,15 @@ class WordPressGUI(QWidget):
             QMessageBox.information(self, 'Finished', 'WordPress Poster finished successfully!')
         self.thread = None
 
+def load_styles(app):
+    style_path = os.path.join(os.getcwd(), 'style.qss')
+    if os.path.exists(style_path):
+        with open(style_path, "r") as style_file:
+            app.setStyleSheet(style_file.read())
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    load_styles(app)
     gui = WordPressGUI()
     gui.show()
     sys.exit(app.exec())
