@@ -2,16 +2,16 @@ import sys
 import json
 import os
 import traceback
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
-    QFileDialog, QLineEdit, QComboBox, QTextEdit
+    QFileDialog, QLineEdit, QComboBox, QTextEdit, QCheckBox
 )
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from article_generator import ArticleGenerator  # Импортируем генератор статей ArticleGenerator.
+from ArticleGenerator.article_generator import ArticleGenerator
 
-
-SETTINGS_FILE_PATH = os.path.join('settings', 'app_settings.json')
+SETTINGS_FILE_PATH = Path('settings') / 'app_settings.json'
 
 
 class WorkerThread(QThread):
@@ -41,8 +41,9 @@ class WorkerThread(QThread):
                 log_output=self.log_signal.emit
             )
 
-            # Генерация статей
-            generator.generate_articles()
+            # Генерация статей без циклической логики
+            self.log_signal.emit("Запуск генерации статей для каждого набора ключевых слов.")
+            generator.generate_article_single_request()
 
             self.finished_signal.emit(True)
         except Exception as e:
@@ -57,8 +58,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle('Генератор SEO статей')
         self.setGeometry(100, 100, 400, 600)
-        icon_path = os.path.join('icons', 'main_icon.ico')
-        self.setWindowIcon(QIcon(icon_path))
+        icon_path = Path('icons') / 'main_icon.ico'
+        self.setWindowIcon(QIcon(str(icon_path)))
 
         self.api_key_file = ''
         self.output_folder = ''
@@ -207,7 +208,7 @@ class MainWindow(QMainWindow):
             'model_name': self.model_combo.currentText(),
             'language': self.language_combo.currentText() if self.language_combo.currentText() != 'Custom' else self.language_input.text(),
         }
-        os.makedirs(os.path.dirname(SETTINGS_FILE_PATH), exist_ok=True)
+        SETTINGS_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(SETTINGS_FILE_PATH, 'w') as file:
             json.dump(settings, file, indent=4)
         self.log_output.append('Настройки сохранены')
@@ -215,7 +216,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
     def load_settings(self):
-        if os.path.exists(SETTINGS_FILE_PATH):
+        if SETTINGS_FILE_PATH.exists():
             self.log_output.append('Загрузка настроек...')
             try:
                 with open(SETTINGS_FILE_PATH, 'r') as file:
@@ -283,21 +284,19 @@ class MainWindow(QMainWindow):
         if self.thread is not None and self.thread.isRunning():
             self.thread.wait()
         event.accept()
+        
+
 
 def load_styles(app):
-    style_path = os.path.join(os.getcwd(), 'style.qss')
-    if os.path.exists(style_path):
+    style_path = Path('style.qss')
+    if style_path.exists():
         with open(style_path, "r") as style_file:
             app.setStyleSheet(style_file.read())
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     load_styles(app)
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    style_path = os.path.join(base_path, 'style.qss')
-    if os.path.exists(style_path):
-        with open(style_path, "r") as style_file:
-            app.setStyleSheet(style_file.read())
 
     window = MainWindow()
     window.show()

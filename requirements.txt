@@ -1,3 +1,4 @@
 aiohttp
 PyQt6
 openai
+pyinstaller

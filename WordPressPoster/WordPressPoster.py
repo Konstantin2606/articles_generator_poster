@@ -1,15 +1,25 @@
 import os
+import sys
 import aiohttp
 import asyncio
 import sqlite3
 import logging
 from aiohttp import BasicAuth
+from pathlib import Path
+
+def resource_path(relative_path):
+    """Возвращает правильный путь к ресурсу, поддерживая как исполняемые файлы, так и обычные скрипты"""
+    if getattr(sys, 'frozen', False):  # Если приложение скомпилировано
+        base_path = Path(sys._MEIPASS)
+    else:  # Если это обычный скрипт
+        base_path = Path(__file__).parent
+    return base_path / relative_path
 
 class WordPressPoster:
     def __init__(self, base_folder, credentials_file, db_file, batch_size=5, pause_between_batches=10, logger=None):
-        self.base_folder = base_folder
-        self.credentials_file = credentials_file
-        self.db_file = db_file
+        self.base_folder = resource_path(base_folder)
+        self.credentials_file = resource_path(credentials_file)
+        self.db_file = resource_path(db_file)
         self.batch_size = batch_size
         self.pause_between_batches = pause_between_batches
         self.sites_credentials = self.load_site_credentials()

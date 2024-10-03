@@ -5,7 +5,16 @@ import asyncio
 import logging
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QCheckBox, QPlainTextEdit)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from WordPressPoster import WordPressPoster  # Импортируем класс WordPressPoster.
+from WordPressPoster.WordPressPoster import WordPressPoster  # Импортируем класс WordPressPoster.
+from pathlib import Path
+
+def resource_path(relative_path):
+    """Возвращает правильный путь к ресурсу, поддерживая как исполняемые файлы, так и обычные скрипты"""
+    if getattr(sys, 'frozen', False):  # Если приложение скомпилировано
+        base_path = Path(sys._MEIPASS)
+    else:  # Если это обычный скрипт
+        base_path = Path(__file__).parent
+    return base_path / relative_path
 
 class WordPressPosterThread(QThread):
     finished = pyqtSignal()

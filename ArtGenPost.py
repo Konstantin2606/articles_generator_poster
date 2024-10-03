@@ -1,9 +1,25 @@
 import sys
-import os
+from pathlib import Path
+import logging
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QLabel, QMessageBox
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt
-import subprocess
+
+# Импортируем окна
+from ArticleGenerator.GeneratorWindow import MainWindow
+from WordPressPoster.WordPressPosterWindow import WordPressGUI
+
+# Настройка логирования
+logging.basicConfig(filename='app.log', level=logging.ERROR,
+                    format='%(asctime)s:%(levelname)s:%(message)s')
+
+def resource_path(relative_path):
+    """Возвращает правильный путь к ресурсу, поддерживая как исполняемые файлы, так и обычные скрипты"""
+    if getattr(sys, 'frozen', False):  # Если приложение скомпилировано
+        base_path = Path(sys._MEIPASS)
+    else:  # Если это обычный скрипт
+        base_path = Path(__file__).parent
+    return base_path / relative_path
 
 class MainAppWindow(QMainWindow):
     def __init__(self):
@@ -13,18 +29,18 @@ class MainAppWindow(QMainWindow):
         self.setWindowTitle("Application Launcher")
         self.setGeometry(300, 300, 400, 200)
 
-        # Load the icon
-        icon_path = os.path.join('icons', 'main_icon.ico')
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        # Load the icon using pathlib
+        icon_path = resource_path('icons/main_icon.ico')
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         # Create buttons
         self.generator_button = QPushButton("Article Generator")
         self.wordpress_button = QPushButton("WordPress Poster")
 
         # Connect buttons to the respective functions
-        self.generator_button.clicked.connect(self.run_generator_window)
-        self.wordpress_button.clicked.connect(self.run_wordpress_poster_window)
+        self.generator_button.clicked.connect(self.show_generator_window)
+        self.wordpress_button.clicked.connect(self.show_wordpress_window)
 
         # Layout for buttons
         layout = QVBoxLayout()
@@ -37,40 +53,43 @@ class MainAppWindow(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-        # Load styles
-        self.load_styles()
-
-    def load_styles(self):
-        # Load styles from style.qss
-        style_path = os.path.join(os.getcwd(), 'style.qss')
-        if os.path.exists(style_path):
-            with open(style_path, "r") as style_file:
-                self.setStyleSheet(style_file.read())
-
-    def run_generator_window(self):
-        # Run GeneratorWindow.py
+    def show_generator_window(self):
         try:
-            subprocess.Popen([sys.executable, os.path.join('ArticleGenerator', 'GeneratorWindow.py')])
+            # Открываем окно генератора статей
+            self.generator_window = MainWindow()
+            self.generator_window.show()
         except Exception as e:
-            self.show_error(f"Failed to launch GeneratorWindow.py: {e}")
+            self.show_error(f"Failed to open Article Generator window: {e}")
 
-    def run_wordpress_poster_window(self):
-        # Run WordPressPosterWindow.py
+    def show_wordpress_window(self):
         try:
-            subprocess.Popen([sys.executable, os.path.join('WordPressPoster', 'WordPressPosterWindow.py')])
+            # Открываем окно публикации WordPress
+            self.wordpress_window = WordPressGUI()
+            self.wordpress_window.show()
         except Exception as e:
-            self.show_error(f"Failed to launch WordPressPosterWindow.py: {e}")
+            self.show_error(f"Failed to open WordPress Poster window: {e}")
 
     def show_error(self, message):
-        # Display error message
+        # Log the error and display error message
+        logging.error(message)
         error_dialog = QMessageBox()
         error_dialog.setIcon(QMessageBox.Icon.Critical)
         error_dialog.setWindowTitle("Error")
         error_dialog.setText(message)
         error_dialog.exec()
 
+def load_styles(app):
+    """Загружает стили и применяет их ко всему приложению"""
+    style_path = resource_path('style.qss')
+    if style_path.exists():
+        with open(style_path, "r") as style_file:
+            app.setStyleSheet(style_file.read())
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # Загружаем стили на уровне всего приложения
+    load_styles(app)
 
     # Create and display the main window
     main_window = MainAppWindow()
