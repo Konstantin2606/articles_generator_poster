@@ -1,9 +1,11 @@
-# articles_generator_poster
+# ArtGenPost
 
+**ArtGenPost** is a desktop application that automatically generates SEO-optimized articles using the GPT API and publishes them to WordPress websites. The application provides a user-friendly graphical interface based on PyQt6 for configuring article generation and publishing settings.
 
-Poster
-1. Application Passwords - wordpress - users - your_user - Application Passwords - new login and after copypaste password
-2. Make a txt file like in the example file
-3. Choose the folder witn sites\ (structure for one - site.com\article\article.txt)
+## Key Features
 
-It's gonna be more instructions here.
+- Generate SEO-optimized articles using GPT models.
+- Publish articles to WordPress websites with the ability to upload images.
+- User-friendly interface for managing article generation and publishing parameters.
+- Batch publishing with pauses between batches.
+- Track already published articles using an SQLite database.
