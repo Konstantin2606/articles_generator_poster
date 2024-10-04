@@ -5,11 +5,14 @@ import traceback
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QWidget,
-    QFileDialog, QLineEdit, QComboBox, QTextEdit, QCheckBox
+    QFileDialog, QLineEdit, QComboBox, QTextEdit
 )
 from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from ArticleGenerator.article_generator import ArticleGenerator
+import asyncio
+import aiohttp
+from ArticleGenerator.article_generator import ArticleGenerator, ImageDownloaderPix  # Предположим, что ArticleGenerator импортирован как отдельный модуль
+import urllib.parse  # Добавляем импорт urllib для работы с кодировкой URL
 
 SETTINGS_FILE_PATH = Path('settings') / 'app_settings.json'
 
@@ -18,7 +21,7 @@ class WorkerThread(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool)
 
-    def __init__(self, data_folder, api_key_file, output_folder, prompt_file, min_chars, model_name, language):
+    def __init__(self, data_folder, api_key_file, output_folder, prompt_file, min_chars, model_name, language, pixabay_api_key, num_images):
         super().__init__()
         self.data_folder = data_folder
         self.api_key_file = api_key_file
@@ -27,9 +30,12 @@ class WorkerThread(QThread):
         self.min_chars = min_chars
         self.model_name = model_name
         self.language = language
+        self.pixabay_api_key = pixabay_api_key
+        self.num_images = num_images
 
-    def run(self):
+    async def run_async(self):
         try:
+            # Создаем экземпляр ArticleGenerator
             generator = ArticleGenerator(
                 self.data_folder,
                 self.api_key_file,
@@ -41,9 +47,11 @@ class WorkerThread(QThread):
                 log_output=self.log_signal.emit
             )
 
-            # Генерация статей без циклической логики
-            self.log_signal.emit("Запуск генерации статей для каждого набора ключевых слов.")
-            generator.generate_article_single_request()
+            # Создаем экземпляр ImageDownloaderPix
+            image_downloader = ImageDownloaderPix(self.pixabay_api_key, self.output_folder, self.log_signal.emit)
+
+            # Генерация статей и скачивание изображений
+            await generator.generate_article_single_request(image_downloader)
 
             self.finished_signal.emit(True)
         except Exception as e:
@@ -51,13 +59,16 @@ class WorkerThread(QThread):
             self.log_signal.emit(error_message)
             self.finished_signal.emit(False)
 
+    def run(self):
+        asyncio.run(self.run_async())
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle('Генератор SEO статей')
-        self.setGeometry(100, 100, 400, 600)
+        self.setWindowTitle('Генератор SEO статей с изображениями')
+        self.setGeometry(100, 100, 400, 700)
         icon_path = Path('icons') / 'main_icon.ico'
         self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -66,6 +77,8 @@ class MainWindow(QMainWindow):
         self.prompt_file = ''
         self.keyword_file = ''
         self.min_chars = None
+        self.pixabay_api_key = ''
+        self.num_images = 1
 
         self.layout = QVBoxLayout()
         self.init_ui()
@@ -80,7 +93,7 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         grid_layout = QGridLayout()
 
-        self.api_key_label = QLabel('Путь к файлу с API ключом:')
+        self.api_key_label = QLabel('Путь к файлу с API ключом OpenAI:')
         self.api_key_path = QLineEdit()
         self.api_key_button = QPushButton('Обзор...')
         self.api_key_button.clicked.connect(self.select_api_key_file)
@@ -117,6 +130,16 @@ class MainWindow(QMainWindow):
         self.language_input.setEnabled(False)
         self.language_combo.currentIndexChanged.connect(self.toggle_custom_language)
 
+        # Добавляем API ключ для Pixabay
+        self.pixabay_api_key_label = QLabel('API ключ для Pixabay:')
+        self.pixabay_api_key_input = QLineEdit()
+        self.pixabay_api_key_input.setPlaceholderText('Введите API ключ для Pixabay')
+
+        # Добавляем поле для количества изображений
+        self.num_images_label = QLabel('Количество изображений:')
+        self.num_images_input = QLineEdit()
+        self.num_images_input.setPlaceholderText('Введите количество изображений')
+
         self.start_button = QPushButton('Запустить генерацию')
         self.start_button.clicked.connect(self.start_process)
 
@@ -151,6 +174,13 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.language_label, 6, 0)
         grid_layout.addWidget(self.language_combo, 6, 1)
         grid_layout.addWidget(self.language_input, 7, 0, 1, 2)
+
+        # Добавляем поля для Pixabay API и количества изображений
+        grid_layout.addWidget(self.pixabay_api_key_label, 8, 0)
+        grid_layout.addWidget(self.pixabay_api_key_input, 8, 1)
+
+        grid_layout.addWidget(self.num_images_label, 9, 0)
+        grid_layout.addWidget(self.num_images_input, 9, 1)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.start_button)
@@ -207,6 +237,8 @@ class MainWindow(QMainWindow):
             'min_chars': self.min_chars_input.text(),
             'model_name': self.model_combo.currentText(),
             'language': self.language_combo.currentText() if self.language_combo.currentText() != 'Custom' else self.language_input.text(),
+            'pixabay_api_key': self.pixabay_api_key_input.text(),
+            'num_images': self.num_images_input.text(),
         }
         SETTINGS_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(SETTINGS_FILE_PATH, 'w') as file:
@@ -242,6 +274,9 @@ class MainWindow(QMainWindow):
                         self.language_combo.setCurrentText('Custom')
                         self.language_input.setText(language)
 
+                    self.pixabay_api_key_input.setText(settings.get('pixabay_api_key', ''))
+                    self.num_images_input.setText(settings.get('num_images', '1'))
+
                     self.log_output.append(f'Загруженные настройки: {settings}')
             except Exception as e:
                 error_message = f'Ошибка загрузки настроек: {str(e)}\n{traceback.format_exc()}'
@@ -252,16 +287,18 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
     def start_process(self):
-        if not self.api_key_file or not self.output_folder or not self.prompt_file or not self.keyword_file or not self.min_chars_input.text():
-            self.log_output.append('Пожалуйста, выберите необходимые файлы, папки и введите минимальное количество символов')
+        if not self.api_key_file or not self.output_folder or not self.prompt_file or not self.keyword_file or not self.min_chars_input.text() or not self.pixabay_api_key_input.text():
+            self.log_output.append('Пожалуйста, выберите необходимые файлы, папки, введите минимальное количество символов и API ключ для Pixabay')
             return
 
         try:
             min_chars = int(self.min_chars_input.text()) if self.min_chars_input.text() else None
             model_name = self.model_combo.currentText()
             language = self.language_combo.currentText() if self.language_combo.currentText() != 'Custom' else self.language_input.text()
+            pixabay_api_key = self.pixabay_api_key_input.text()
+            num_images = int(self.num_images_input.text()) if self.num_images_input.text() else 1
 
-            self.thread = WorkerThread(self.keyword_file, self.api_key_file, self.output_folder, self.prompt_file, min_chars, model_name, language)
+            self.thread = WorkerThread(self.keyword_file, self.api_key_file, self.output_folder, self.prompt_file, min_chars, model_name, language, pixabay_api_key, num_images)
             self.thread.log_signal.connect(self.log_output.append)
             self.thread.finished_signal.connect(self.on_process_finished)
             self.thread.start()
@@ -284,20 +321,10 @@ class MainWindow(QMainWindow):
         if self.thread is not None and self.thread.isRunning():
             self.thread.wait()
         event.accept()
-        
-
-
-def load_styles(app):
-    style_path = Path('style.qss')
-    if style_path.exists():
-        with open(style_path, "r") as style_file:
-            app.setStyleSheet(style_file.read())
 
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    load_styles(app)
-
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
