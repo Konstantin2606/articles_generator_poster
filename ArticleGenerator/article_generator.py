@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from openai import OpenAI
 import urllib.parse  # Добавляем импорт urllib для работы с кодировкой URL
+import csv
 
 class ArticleGenerator:
     def __init__(self, data_folder, api_key_file, output_folder, prompt_file, min_chars, model_name="gpt-4o-mini", language="English", log_output=None):
@@ -89,7 +90,7 @@ class ArticleGenerator:
                             os.makedirs(site_folder)
 
                         keyword_string = ', '.join(keywords)
-                        prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nFirst line should be a headline."
+                        prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nFirst line should be a headline max 35 characters and with punktum in the end."
 
                         approx_tokens = int(self.min_chars / 5)
                         max_tokens = min(approx_tokens, 4096)
@@ -194,32 +195,119 @@ class ArticleGenerator:
 
 
 class ImageDownloaderPix:
-    def __init__(self, api_key, base_image_path, log_function=logging.info):
+    def __init__(self, api_key, base_image_path, log_function=None):
         self.api_key = api_key
         self.base_image_path = base_image_path
-        self.log_function = log_function
+        self.log_function = log_function or print
+        self.max_retries = 3  # Количество повторных попыток
+        self.delay = 5  # Увеличенная задержка между запросами
+        self.csv_file = os.path.join('settings', 'downloaded_images.csv')  # Путь к CSV в папке settings
+
+        # Список User-Agent для ротации
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
+            "Mozilla/5.0 (Windows NT 10.0; WOW64; rv:88.0) Gecko/20100101 Firefox/88.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:88.0) Gecko/20100101 Firefox/88.0"
+        ]
+
+        # Проверка существования папки для settings
+        os.makedirs('settings', exist_ok=True)
+        # Проверка существования CSV файла
+        if not os.path.exists(self.csv_file):
+            with open(self.csv_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['query', 'filename', 'url', 'tags', 'type'])
+
+    def get_random_user_agent(self):
+        """Возвращает случайный User-Agent из списка."""
+        return random.choice(self.user_agents)
+
+    def image_already_downloaded(self, image_url):
+        """Проверяет, было ли изображение уже загружено по URL."""
+        if not os.path.exists(self.csv_file):
+            return False
+
+        with open(self.csv_file, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader)  # Пропускаем заголовок
+            for row in reader:
+                if row[2] == image_url:  # Сравниваем по URL (третья колонка)
+                    return True  # Изображение уже загружено
+        return False
+
+    def write_to_csv(self, query, filename, image_url, image_tags, image_type):
+        """Записывает информацию об изображении в CSV файл."""
+        with open(self.csv_file, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([query, filename, image_url, image_tags, image_type])
+
+    async def download_images_for_keyword(self, session, keyword, output_folder):
+        """Загружает изображения для заданного ключевого слова"""
+        encoded_keyword = urllib.parse.quote(keyword)
+        url = f'https://pixabay.com/api/?key={self.api_key}&q={encoded_keyword}&per_page=5'  # Увеличим количество картинок до 5
+
+        for attempt in range(self.max_retries):
+            try:
+                user_agent = self.get_random_user_agent()  # Выбираем случайный User-Agent
+                self.log_function(f"Requesting images for keyword: {keyword} (Attempt {attempt + 1}) with User-Agent: {user_agent}")
+
+                headers = {'User-Agent': user_agent}
+
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 502:
+                        self.log_function(f"Received 502 Bad Gateway. Retrying in {self.delay} seconds...")
+                        await asyncio.sleep(self.delay)  # Увеличенная задержка перед повторной попыткой
+                        continue
+
+                    if response.status == 429:
+                        self.log_function(f"Received 429 Too Many Requests. Waiting for 10 seconds...")
+                        await asyncio.sleep(10)  # Задержка в 10 секунд при превышении лимита запросов
+                        continue
+
+                    response.raise_for_status()  # Поднимаем исключение для любых других ошибок HTTP
+                    data = await response.json()
+
+                    if 'hits' in data and data['hits']:
+                        # Пробегаем по всем результатам поиска и ищем первое незагруженное изображение
+                        for hit in data['hits']:
+                            image_url = hit['largeImageURL']
+                            image_tags = hit['tags']
+                            image_type = hit['type']
+                            
+                            # Проверяем, было ли изображение загружено по URL
+                            if not self.image_already_downloaded(image_url):
+                                await self.download_image(session, image_url, output_folder, keyword, image_tags, image_type)
+                                return True  # Успешно скачали изображение
+                        
+                        # Если все изображения уже были загружены
+                        self.log_function(f"All images for keyword '{keyword}' are already downloaded.")
+                        return False  # Все изображения были загружены
+                    else:
+                        self.log_function(f"No images found for keyword: {keyword}")
+                        return False
+            except aiohttp.ClientError as e:
+                self.log_function(f"Network error occurred: {e}. Retrying in {self.delay} seconds...")
+                await asyncio.sleep(self.delay)  # Задержка перед повторной попыткой
+            except Exception as e:
+                self.log_function(f"Unexpected error occurred: {e}")
+                break  # Прерываем, если ошибка не связана с сетью
+        return False
 
     async def download_random_image(self, session, keywords, output_folder):
-        """Загружает случайное изображение с Pixabay по заданным ключевым словам"""
-        random_keyword = random.choice(keywords)
-        encoded_keyword = urllib.parse.quote(random_keyword)
-        url = f'https://pixabay.com/api/?key={self.api_key}&q={encoded_keyword}&per_page=3'
+        """Пытается загрузить изображение для каждого ключевого слова, пока не найдет новое изображение"""
+        # Пробегаем по каждому ключевому слову
+        for keyword in keywords:
+            success = await self.download_images_for_keyword(session, keyword, output_folder)
+            if success:
+                return  # Успешно скачали изображение, выходим из функции
 
-        try:
-            self.log_function(f"Requesting image for keyword: {random_keyword}")
-            async with session.get(url) as response:
-                response.raise_for_status()
-                data = await response.json()
-                if 'hits' in data and data['hits']:
-                    image_url = data['hits'][0]['largeImageURL']
-                    await self.download_image(session, image_url, output_folder, random_keyword)
-                else:
-                    self.log_function(f"No images found for keyword: {random_keyword}")
-        except Exception as e:
-            self.log_function(f"Error downloading image: {e}")
+        # Если для всех ключевых слов изображения уже загружены
+        self.log_function("All images for all keywords are already downloaded.")
 
-    async def download_image(self, session, image_url, output_folder, keyword):
-        """Загружает изображение и сохраняет его с именем, включающим ключевое слово и случайное число"""
+    async def download_image(self, session, image_url, output_folder, keyword, image_tags, image_type):
+        """Загружает изображение и сохраняет его с именем, включающим ключевое слово"""
         random_number = random.randint(1000, 9999)
         image_extension = os.path.splitext(image_url)[1]  # Получаем расширение файла (например, .jpg, .png)
         image_filename = f"{keyword}_{random_number}{image_extension}"  # Формируем имя файла
@@ -232,21 +320,10 @@ class ImageDownloaderPix:
                 with open(image_path, 'wb') as image_file:
                     image_file.write(image_data)
                 self.log_function(f"Image saved: {image_path}")
+
+                # Сохраняем информацию об изображении в CSV, включая URL
+                self.write_to_csv(keyword, image_filename, image_url, image_tags, image_type)
+        except aiohttp.ClientError as e:
+            self.log_function(f"Failed to download image {image_filename}: {e}")
         except Exception as e:
-            self.log_function(f"Failed to download image: {e}")
-
-
-# Example usage:
-if __name__ == '__main__':
-    api_key = "your_pixabay_api_key"
-    database_path = "path_to_your_database.db"
-    base_image_path = "path_to_image_storage"
-    
-    # Создание экземпляров ArticleGenerator и ImageDownloaderPix
-    downloader = ImageDownloaderPix(api_key, base_image_path)
-    article_generator = ArticleGenerator(data_folder="data_folder", api_key_file="api_key_file", 
-                                         output_folder="output_folder", prompt_file="prompt_file", 
-                                         min_chars=500)
-
-    # Запуск генерации статей и загрузки изображений
-    asyncio.run(article_generator.generate_article_single_request(downloader))
+            self.log_function(f"Unexpected error during image download: {e}")

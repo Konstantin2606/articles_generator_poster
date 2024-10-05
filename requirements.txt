@@ -1,4 +1,6 @@
 aiohttp
+asyncio
+requests
 PyQt6
 openai
 pyinstaller
