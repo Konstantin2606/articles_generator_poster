@@ -175,8 +175,8 @@ class WordPressPoster:
                         uploaded_image_urls.append(f'<img src="https://{site}/wp-content/uploads/{image_id}" alt="{post_title}">')
                 
                 # Добавляем все загруженные изображения в конец контента поста
-                if uploaded_image_urls:
-                    post_content += "<br>" + "<br>".join(uploaded_image_urls)  # Добавляем изображения в HTML
+                #if uploaded_image_urls:
+                #    post_content += "<br>" + "<br>".join(uploaded_image_urls)  # Добавляем изображения в HTML
 
             # Публикуем пост с первым изображением как featured
             success = await self.publish_post(session, site, credentials['login'], credentials['password'], post_title, post_content, featured_image_id)

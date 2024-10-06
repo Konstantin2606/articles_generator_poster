@@ -48,10 +48,8 @@ class ArticleGenerator:
 
     def clean_text(self, text):
         """Функция для очистки текста от лишних символов"""
-        # Удаляем все незначащие символы и оставляем только разрешенные для статей символы
+        # Удаляем только не типичные символы, оставляем пробелы и переносы строк
         cleaned_text = re.sub(r'[^a-zA-Zа-яА-Я0-9\s.,!?\'"()\-–:;]', '', text)
-        # Убираем лишние пробелы
-        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
         return cleaned_text
 
     def sanitize_filename(self, filename, max_length=50):
@@ -60,12 +58,14 @@ class ArticleGenerator:
         sanitized = sanitized.replace('\n', ' ').strip()  # Убираем переносы строк и лишние пробелы
         return sanitized[:max_length].strip()  # Ограничиваем длину до max_length символов
 
-    def trim_incomplete_sentence(self, text):
-        """Обрезает текст до последнего полного предложения"""
-        last_sentence_match = re.search(r'(.+[.!?])[^.!?]*$', text)
-        if last_sentence_match:
-            return last_sentence_match.group(1)  # Возвращаем текст до конца последнего завершенного предложения
-        return text  # Если не нашли завершенных предложений, возвращаем текст как есть
+    def remove_content_after_trigger(self, text, trigger="---"):
+        """Удаляет текст после строки с триггером"""
+        trigger_index = text.find(trigger)
+        if trigger_index != -1:
+            self.log(f"Trigger '{trigger}' found. Removing content after it.")
+            return text[:trigger_index].strip()  # Удаляем все после триггера и возвращаем текст до него
+        return text
+
 
     async def generate_article_single_request(self, image_downloader):
         """Генерация статьи одним запросом для каждого набора ключевых слов и скачивание изображения"""
@@ -76,12 +76,14 @@ class ArticleGenerator:
             prompt = self.read_prompt()
             keywords_data = self.read_keywords(self.data_folder)
 
+            # Рассчитываем минимальный объем текста, с которым будем работать (60% от min_chars)
+            min_required_chars = int(self.min_chars * 0.6)
+
             async with aiohttp.ClientSession() as session:
                 for site, keywords_sets in keywords_data.items():
                     for keywords in keywords_sets:
                         self.log(f"Generating article for site '{site}' with keywords: {keywords}")
 
-                        # Получаем первые три ключевых слова и используем их для названия папки
                         first_keywords = ' '.join(keywords[:3])
                         sanitized_keywords = self.sanitize_filename(first_keywords, max_length=30)
 
@@ -90,60 +92,78 @@ class ArticleGenerator:
                             os.makedirs(site_folder)
 
                         keyword_string = ', '.join(keywords)
-                        prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nFirst line should be a headline max 35 characters and with punktum in the end."
+                        prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nGenerate content according to the following parameters."
 
+                        # Начальные параметры токенов для генерации
                         approx_tokens = int(self.min_chars / 5)
                         max_tokens = min(approx_tokens, 4096)
 
-                        response = self.client.chat.completions.create(
-                            model=self.model_name,
-                            messages=[{"role": "system", "content": f"You are an expert in generating SEO-optimized articles in {self.language}."},
-                                      {"role": "user", "content": prompt_with_keywords}],
-                            max_tokens=max_tokens
-                        )
+                        article_generated = False
+                        generation_attempts = 0
 
-                        result = response.choices[0].message.content
+                        # Пока не сгенерируем текст достаточного объема, продолжаем перегенерацию
+                        while not article_generated:
+                            generation_attempts += 1
+                            response = self.client.chat.completions.create(
+                                model=self.model_name,
+                                messages=[{"role": "system", "content": f"You are an expert in generating SEO-optimized articles in {self.language}."},
+                                        {"role": "user", "content": prompt_with_keywords}],
+                                max_tokens=max_tokens
+                            )
 
-                        # Чистим текст
-                        cleaned_article = self.clean_text(result)
+                            result = response.choices[0].message.content
 
-                        # Обрезаем незавершенное предложение
-                        trimmed_article = self.trim_incomplete_sentence(cleaned_article)
+                            # Логируем количество символов до очистки текста
+                            self.log(f"Generated article length before cleaning: {len(result)} characters on attempt {generation_attempts}.")
 
-                        # Разделение заголовка и текста
-                        headline, remaining_content = self.extract_headline(trimmed_article)
+                            # Возвращаем очистку текста
+                            cleaned_article = self.clean_text(result)
 
-                        if headline:
-                            sanitized_headline = self.sanitize_filename(headline, max_length=10)
-                            formatted_article = f"{headline}\n\n{remaining_content}"
+                            # Логируем количество символов после очистки текста
+                            self.log(f"Generated article length after cleaning: {len(cleaned_article)} characters on attempt {generation_attempts}.")
 
-                            # Создаем папку по первым трем ключевым словам
+                            # Удаление текста после триггера "---"
+                            trigger = "---"
+                            if trigger in cleaned_article:
+                                cleaned_article = cleaned_article.split(trigger)[0].strip()
+                                self.log(f"Text truncated after trigger '{trigger}'.")
+
+                            # Проверяем объем текста
+                            if len(cleaned_article) >= min_required_chars:
+                                article_generated = True  # Достаточный объем текста
+                            else:
+                                # Увеличиваем количество запрашиваемых токенов для следующего запроса
+                                self.log(f"Generated text is too short (only {len(cleaned_article)} chars), retrying with more tokens...")
+                                max_tokens += int(self.min_chars / 10)  # Увеличиваем на 10% от min_chars
+                                if max_tokens > 8192:  # Ограничим максимальное количество токенов для модели
+                                    self.log("Exceeded maximum token limit for generation, stopping...")
+                                    break
+
+                        if article_generated:
+                            # Сохраняем весь текст после очистки, без обрезки
+                            formatted_article = cleaned_article
+
                             headline_folder = os.path.join(site_folder, sanitized_keywords)
                             if not os.path.exists(headline_folder):
                                 os.makedirs(headline_folder)
 
                             output_file = os.path.join(headline_folder, "article.txt")
-                        else:
-                            sanitized_headline = "Unnamed_Article"
-                            formatted_article = trimmed_article
 
-                            headline_folder = os.path.join(site_folder, sanitized_keywords)
-                            if not os.path.exists(headline_folder):
-                                os.makedirs(headline_folder)
+                            # Логируем количество символов в окончательном тексте перед сохранением
+                            self.log(f"Final article length before saving: {len(formatted_article)} characters.")
 
-                            output_file = os.path.join(headline_folder, "article.txt")
+                            # Сохраняем статью
+                            with open(output_file, 'w', encoding='utf-8') as file:
+                                file.write(formatted_article)
 
-                        # Сохраняем статью
-                        with open(output_file, 'w', encoding='utf-8') as file:
-                            file.write(formatted_article)
+                            self.log(f"Article saved to {output_file}")
 
-                        self.log(f"Article saved to {output_file}")
-
-                        # Загрузка изображения
-                        await image_downloader.download_random_image(session, keywords, headline_folder)
+                            # Загрузка изображения
+                            await image_downloader.download_random_image(session, keywords, headline_folder)
 
         except Exception as e:
             self.log(f"Error generating article: {e}")
+
 
     def read_keywords(self, keyword_file):
         """Чтение файла с ключевыми словами"""
@@ -182,16 +202,6 @@ class ArticleGenerator:
         self.log(f'Switching to API key {self.current_key_index}')
         return key
 
-    def extract_headline(self, text):
-        """Извлечение заголовка из первого предложения, если после точки есть пробел"""
-        first_sentence_end = text.find(".")
-
-        if first_sentence_end != -1 and (first_sentence_end + 1 < len(text)) and text[first_sentence_end + 1] == " ":
-            headline = text[:first_sentence_end + 1].strip()  # Включаем точку
-            remaining_text = text[first_sentence_end + 1:].strip()
-            return headline, remaining_text
-        else:
-            return None, text.strip()
 
 
 class ImageDownloaderPix:
@@ -200,8 +210,8 @@ class ImageDownloaderPix:
         self.base_image_path = base_image_path
         self.log_function = log_function or print
         self.max_retries = 3  # Количество повторных попыток
-        self.delay = 5  # Увеличенная задержка между запросами
-        self.csv_file = os.path.join('settings', 'downloaded_images.csv')  # Путь к CSV в папке settings
+        self.delay = 5  # Задержка между запросами
+        self.csv_file = os.path.join('settings', 'downloaded_images.csv')  # Путь к CSV-файлу в папке settings
 
         # Список User-Agent для ротации
         self.user_agents = [
@@ -214,100 +224,125 @@ class ImageDownloaderPix:
 
         # Проверка существования папки для settings
         os.makedirs('settings', exist_ok=True)
-        # Проверка существования CSV файла
+
+        # Проверка существования CSV файла, если его нет, создаем с заголовками
         if not os.path.exists(self.csv_file):
             with open(self.csv_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(['query', 'filename', 'url', 'tags', 'type'])
+                writer.writerow(['query', 'filename', 'url'])  # Заголовки для файла CSV
 
     def get_random_user_agent(self):
         """Возвращает случайный User-Agent из списка."""
         return random.choice(self.user_agents)
 
-    def image_already_downloaded(self, image_url):
-        """Проверяет, было ли изображение уже загружено по URL."""
+    def image_already_downloaded(self, image_tags):
+        """Проверяет, были ли изображения уже загружены по тегам"""
+        self.log_function(f"Checking if image with tags '{image_tags}' has already been downloaded.")
+        
         if not os.path.exists(self.csv_file):
+            self.log_function("CSV file does not exist. Proceeding with download.")
             return False
 
         with open(self.csv_file, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             next(reader)  # Пропускаем заголовок
             for row in reader:
-                if row[2] == image_url:  # Сравниваем по URL (третья колонка)
-                    return True  # Изображение уже загружено
+                # Проверяем, что строка содержит достаточно колонок
+                if len(row) < 4:
+                    self.log_function(f"Invalid row format in CSV: {row}, skipping...")
+                    continue
+                
+                # Сравниваем теги (четвертая колонка в CSV)
+                if row[3] == image_tags:
+                    self.log_function(f"Image with tags '{image_tags}' already downloaded.")
+                    return True  # Изображение с такими тегами уже загружено
+        self.log_function(f"Image with tags '{image_tags}' has not been downloaded yet.")
         return False
+
 
     def write_to_csv(self, query, filename, image_url, image_tags, image_type):
         """Записывает информацию об изображении в CSV файл."""
+        self.log_function(f"Writing image data to CSV: {self.csv_file} | Query: {query}, Filename: {filename}, URL: {image_url}, Tags: {image_tags}, Type: {image_type}")
+        
         with open(self.csv_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow([query, filename, image_url, image_tags, image_type])
+        self.log_function(f"Successfully wrote image data to CSV.")
+
 
     async def download_images_for_keyword(self, session, keyword, output_folder):
         """Загружает изображения для заданного ключевого слова"""
+        self.log_function(f"Starting image search for keyword: {keyword}")
+        
         encoded_keyword = urllib.parse.quote(keyword)
-        url = f'https://pixabay.com/api/?key={self.api_key}&q={encoded_keyword}&per_page=5'  # Увеличим количество картинок до 5
+        url = f'https://pixabay.com/api/?key={self.api_key}&q={encoded_keyword}&per_page=5'
 
         for attempt in range(self.max_retries):
             try:
-                user_agent = self.get_random_user_agent()  # Выбираем случайный User-Agent
+                user_agent = self.get_random_user_agent()
                 self.log_function(f"Requesting images for keyword: {keyword} (Attempt {attempt + 1}) with User-Agent: {user_agent}")
 
                 headers = {'User-Agent': user_agent}
 
                 async with session.get(url, headers=headers) as response:
+                    self.log_function(f"Received response with status code: {response.status}")
+                    
                     if response.status == 502:
                         self.log_function(f"Received 502 Bad Gateway. Retrying in {self.delay} seconds...")
-                        await asyncio.sleep(self.delay)  # Увеличенная задержка перед повторной попыткой
+                        await asyncio.sleep(self.delay)
                         continue
 
                     if response.status == 429:
                         self.log_function(f"Received 429 Too Many Requests. Waiting for 10 seconds...")
-                        await asyncio.sleep(10)  # Задержка в 10 секунд при превышении лимита запросов
+                        await asyncio.sleep(10)
                         continue
 
-                    response.raise_for_status()  # Поднимаем исключение для любых других ошибок HTTP
+                    response.raise_for_status()
                     data = await response.json()
 
-                    if 'hits' in data and data['hits']:
-                        # Пробегаем по всем результатам поиска и ищем первое незагруженное изображение
+                    self.log_function(f"Received data: {data}")
+                    
+                    # Проверяем, что полученные данные содержат ключ 'hits' и что там есть результаты
+                    if 'hits' in data and isinstance(data['hits'], list):
+                        if len(data['hits']) == 0:
+                            self.log_function(f"No images found for keyword: {keyword}.")
+                            return False
+
                         for hit in data['hits']:
-                            image_url = hit['largeImageURL']
-                            image_tags = hit['tags']
-                            image_type = hit['type']
-                            
-                            # Проверяем, было ли изображение загружено по URL
-                            if not self.image_already_downloaded(image_url):
+                            # Логируем полный 'hit', чтобы точно видеть данные
+                            self.log_function(f"Processing hit: {hit}")
+
+                            image_tags = hit.get('tags', None)  # Безопасно получаем теги
+                            image_url = hit.get('largeImageURL', None)  # Безопасно получаем URL
+                            image_type = hit.get('type', None)  # Безопасно получаем тип изображения
+
+                            # Проверяем, чтобы теги и URL были корректными
+                            if not image_tags or not image_url:
+                                self.log_function("Missing image tags or URL, skipping this hit...")
+                                continue
+
+                            # Проверяем, были ли изображения с такими тегами уже загружены
+                            if not self.image_already_downloaded(image_tags):
                                 await self.download_image(session, image_url, output_folder, keyword, image_tags, image_type)
                                 return True  # Успешно скачали изображение
-                        
-                        # Если все изображения уже были загружены
-                        self.log_function(f"All images for keyword '{keyword}' are already downloaded.")
-                        return False  # Все изображения были загружены
+                        self.log_function(f"All images for keyword '{keyword}' are already downloaded by tags.")
+                        return False
                     else:
-                        self.log_function(f"No images found for keyword: {keyword}")
+                        self.log_function(f"No valid 'hits' found in the response for keyword: {keyword}. Data received: {data}")
                         return False
             except aiohttp.ClientError as e:
                 self.log_function(f"Network error occurred: {e}. Retrying in {self.delay} seconds...")
-                await asyncio.sleep(self.delay)  # Задержка перед повторной попыткой
+                await asyncio.sleep(self.delay)
             except Exception as e:
                 self.log_function(f"Unexpected error occurred: {e}")
-                break  # Прерываем, если ошибка не связана с сетью
+                break
         return False
 
-    async def download_random_image(self, session, keywords, output_folder):
-        """Пытается загрузить изображение для каждого ключевого слова, пока не найдет новое изображение"""
-        # Пробегаем по каждому ключевому слову
-        for keyword in keywords:
-            success = await self.download_images_for_keyword(session, keyword, output_folder)
-            if success:
-                return  # Успешно скачали изображение, выходим из функции
-
-        # Если для всех ключевых слов изображения уже загружены
-        self.log_function("All images for all keywords are already downloaded.")
 
     async def download_image(self, session, image_url, output_folder, keyword, image_tags, image_type):
         """Загружает изображение и сохраняет его с именем, включающим ключевое слово"""
+        self.log_function(f"Starting download for image with tags '{image_tags}' from URL: {image_url}")
+        
         random_number = random.randint(1000, 9999)
         image_extension = os.path.splitext(image_url)[1]  # Получаем расширение файла (например, .jpg, .png)
         image_filename = f"{keyword}_{random_number}{image_extension}"  # Формируем имя файла
@@ -315,6 +350,7 @@ class ImageDownloaderPix:
 
         try:
             async with session.get(image_url) as response:
+                self.log_function(f"Downloading image: {image_filename}")
                 response.raise_for_status()
                 image_data = await response.read()
                 with open(image_path, 'wb') as image_file:
@@ -323,7 +359,31 @@ class ImageDownloaderPix:
 
                 # Сохраняем информацию об изображении в CSV, включая URL
                 self.write_to_csv(keyword, image_filename, image_url, image_tags, image_type)
+                self.log_function(f"Image information saved to CSV: {self.csv_file}")
         except aiohttp.ClientError as e:
             self.log_function(f"Failed to download image {image_filename}: {e}")
         except Exception as e:
             self.log_function(f"Unexpected error during image download: {e}")
+
+
+
+    async def download_random_image(self, session, keywords, output_folder):
+        """Пытается загрузить изображение для каждого ключевого слова, пока не найдет новое изображение"""
+        if not keywords:
+            self.log_function("No keywords provided, skipping image download.")
+            return
+        
+        # Пробегаем по каждому ключевому слову
+        for keyword in keywords:
+            self.log_function(f"Trying to download images for keyword: {keyword}")
+            
+            # Пытаемся загрузить изображение для ключевого слова
+            success = await self.download_images_for_keyword(session, keyword, output_folder)
+            
+            if success:
+                self.log_function(f"Successfully downloaded an image for keyword: {keyword}")
+                return  # Успешно скачали изображение, выходим из функции
+
+        # Если для всех ключевых слов изображения уже загружены или произошли ошибки
+        self.log_function("All images for all keywords are already downloaded or no suitable images found.")
+
