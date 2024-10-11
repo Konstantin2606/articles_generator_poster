@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import asyncio
 import aiohttp
 from ArticleGenerator.article_generator import ArticleGenerator, ImageDownloaderPix  # Предположим, что ArticleGenerator импортирован как отдельный модуль
-import urllib.parse  # Добавляем импорт urllib для работы с кодировкой URL
+import urllib.parse
 
 SETTINGS_FILE_PATH = Path('settings') / 'app_settings.json'
 
@@ -50,7 +50,7 @@ class WorkerThread(QThread):
             # Создаем экземпляр ImageDownloaderPix
             image_downloader = ImageDownloaderPix(self.pixabay_api_key, self.output_folder, self.log_signal.emit)
 
-            # Генерация статей и скачивание изображений
+            # Генерация статей и скачивание изображений с несколькими попытками
             await generator.generate_article_single_request(image_downloader)
 
             self.finished_signal.emit(True)

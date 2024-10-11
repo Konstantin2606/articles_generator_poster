@@ -12,164 +12,123 @@ import csv
 
 class ArticleGenerator:
     def __init__(self, data_folder, api_key_file, output_folder, prompt_file, min_chars, model_name="gpt-4o-mini", language="English", log_output=None):
-        self.data_folder = Path(data_folder).resolve()  # Преобразуем в абсолютный путь
-        self.api_key_file = Path(api_key_file).resolve()  # Преобразуем в абсолютный путь
-        self.output_folder = Path(output_folder).resolve()  # Преобразуем в абсолютный путь
-        self.prompt_file = Path(prompt_file).resolve()  # Преобразуем в абсолютный путь
+        self.data_folder = Path(data_folder).resolve()
+        self.api_key_file = Path(api_key_file).resolve()
+        self.output_folder = Path(output_folder).resolve()
+        self.prompt_file = Path(prompt_file).resolve()
         self.min_chars = min_chars
         self.model_name = model_name
         self.language = language
         self.log_output = log_output
 
-        self.api_keys = self.load_api_keys()  # Загружаем API-ключи
+        self.api_keys = self.load_api_keys()
         self.current_key_index = 0
 
     def log(self, message):
-        """Метод для вывода логов"""
         if self.log_output:
             self.log_output(message)
         print(message)
 
     def load_api_keys(self):
-        """Загрузка API-ключей из файла"""
         if not self.api_key_file.exists():
             raise FileNotFoundError(f"API key file not found: {self.api_key_file}")
-
         with open(self.api_key_file, 'r') as file:
             keys = [line.strip() for line in file.readlines() if line.strip()]
-
         self.log(f'Loaded {len(keys)} API keys')
         return keys
 
     def set_GPT(self):
-        """Установка модели GPT в зависимости от выбора пользователя"""
         self.client = OpenAI(api_key=self.next_api_key())
         self.log(f'Set GPT model to {self.model_name}')
 
     def clean_text(self, text):
-        """Функция для очистки текста от лишних символов"""
-        # Удаляем только не типичные символы, оставляем пробелы и переносы строк
-        cleaned_text = re.sub(r'[^a-zA-Zа-яА-Я0-9\s.,!?\'"()\-–:;]', '', text)
-        return cleaned_text
+        return re.sub(r'[^a-zA-Zа-яА-Я0-9\s.,!?\'"()\-–:;]', '', text)
 
     def sanitize_filename(self, filename, max_length=50):
-        """Удаление недопустимых символов и сокращение длины имени файла"""
-        sanitized = re.sub(r'[\/:*?"<>|]', '', filename)  # Убираем недопустимые символы
-        sanitized = sanitized.replace('\n', ' ').strip()  # Убираем переносы строк и лишние пробелы
-        return sanitized[:max_length].strip()  # Ограничиваем длину до max_length символов
+        sanitized = re.sub(r'[\/:*?"<>|]', '', filename)
+        return sanitized[:max_length].strip()
 
     def remove_content_after_trigger(self, text, trigger="---"):
-        """Удаляет текст после строки с триггером"""
         trigger_index = text.find(trigger)
         if trigger_index != -1:
             self.log(f"Trigger '{trigger}' found. Removing content after it.")
-            return text[:trigger_index].strip()  # Удаляем все после триггера и возвращаем текст до него
+            return text[:trigger_index].strip()
         return text
 
-
     async def generate_article_single_request(self, image_downloader):
-        """Генерация статьи одним запросом для каждого набора ключевых слов и скачивание изображения"""
         try:
             self.set_GPT()
-            self.log(f'Using model: {self.model_name}')
-
             prompt = self.read_prompt()
             keywords_data = self.read_keywords(self.data_folder)
-
-            # Рассчитываем минимальный объем текста, с которым будем работать (60% от min_chars)
             min_required_chars = int(self.min_chars * 0.6)
 
             async with aiohttp.ClientSession() as session:
                 for site, keywords_sets in keywords_data.items():
                     for keywords in keywords_sets:
                         self.log(f"Generating article for site '{site}' with keywords: {keywords}")
-
                         first_keywords = ' '.join(keywords[:3])
                         sanitized_keywords = self.sanitize_filename(first_keywords, max_length=30)
 
                         site_folder = os.path.join(self.output_folder, site)
-                        if not os.path.exists(site_folder):
-                            os.makedirs(site_folder)
+                        os.makedirs(site_folder, exist_ok=True)
 
                         keyword_string = ', '.join(keywords)
                         prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nGenerate content according to the following parameters."
 
-                        # Начальные параметры токенов для генерации
-                        approx_tokens = int(self.min_chars / 5)
-                        max_tokens = min(approx_tokens, 4096)
+                        max_tokens = min(int(self.min_chars / 5), 4096)
+                        formatted_article = self.generate_article_with_retries(prompt_with_keywords, min_required_chars, max_tokens)
 
-                        article_generated = False
-                        generation_attempts = 0
-
-                        # Пока не сгенерируем текст достаточного объема, продолжаем перегенерацию
-                        while not article_generated:
-                            generation_attempts += 1
-                            response = self.client.chat.completions.create(
-                                model=self.model_name,
-                                messages=[{"role": "system", "content": f"You are an expert in generating SEO-optimized articles in {self.language}."},
-                                        {"role": "user", "content": prompt_with_keywords}],
-                                max_tokens=max_tokens
-                            )
-
-                            result = response.choices[0].message.content
-
-                            # Логируем количество символов до очистки текста
-                            self.log(f"Generated article length before cleaning: {len(result)} characters on attempt {generation_attempts}.")
-
-                            # Возвращаем очистку текста
-                            cleaned_article = self.clean_text(result)
-
-                            # Логируем количество символов после очистки текста
-                            self.log(f"Generated article length after cleaning: {len(cleaned_article)} characters on attempt {generation_attempts}.")
-
-                            # Удаление текста после триггера "---"
-                            trigger = "---"
-                            if trigger in cleaned_article:
-                                cleaned_article = cleaned_article.split(trigger)[0].strip()
-                                self.log(f"Text truncated after trigger '{trigger}'.")
-
-                            # Проверяем объем текста
-                            if len(cleaned_article) >= min_required_chars:
-                                article_generated = True  # Достаточный объем текста
-                            else:
-                                # Увеличиваем количество запрашиваемых токенов для следующего запроса
-                                self.log(f"Generated text is too short (only {len(cleaned_article)} chars), retrying with more tokens...")
-                                max_tokens += int(self.min_chars / 10)  # Увеличиваем на 10% от min_chars
-                                if max_tokens > 8192:  # Ограничим максимальное количество токенов для модели
-                                    self.log("Exceeded maximum token limit for generation, stopping...")
-                                    break
-
-                        if article_generated:
-                            # Сохраняем весь текст после очистки, без обрезки
-                            formatted_article = cleaned_article
-
+                        if formatted_article:
                             headline_folder = os.path.join(site_folder, sanitized_keywords)
-                            if not os.path.exists(headline_folder):
-                                os.makedirs(headline_folder)
+                            os.makedirs(headline_folder, exist_ok=True)
 
                             output_file = os.path.join(headline_folder, "article.txt")
-
-                            # Логируем количество символов в окончательном тексте перед сохранением
-                            self.log(f"Final article length before saving: {len(formatted_article)} characters.")
-
-                            # Сохраняем статью
                             with open(output_file, 'w', encoding='utf-8') as file:
                                 file.write(formatted_article)
 
                             self.log(f"Article saved to {output_file}")
-
-                            # Загрузка изображения
                             await image_downloader.download_random_image(session, keywords, headline_folder)
 
         except Exception as e:
             self.log(f"Error generating article: {e}")
 
+    def generate_article_with_retries(self, prompt_with_keywords, min_required_chars, max_tokens, retry_count=2):
+        generated_texts = []
+        for attempt in range(retry_count):
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": f"You are an expert in generating SEO-optimized articles in {self.language}."},
+                        {"role": "user", "content": prompt_with_keywords}],
+                max_tokens=max_tokens
+            )
+
+            result = response.choices[0].message.content
+            cleaned_article = self.clean_text(result)
+            
+            # Применение триггера для обрезки текста
+            truncated_article = self.remove_content_after_trigger(cleaned_article, trigger="---")
+            
+            if len(truncated_article) >= min_required_chars:
+                generated_texts.append(truncated_article)
+                self.log(f"Generated article {attempt + 1} meets minimum character requirement: {len(truncated_article)} characters.")
+            else:
+                self.log(f"Generated article {attempt + 1} too short, retrying...")
+
+        unique_text = self.get_most_unique_text(generated_texts)
+        return unique_text
+
+
+    def get_most_unique_text(self, generated_texts):
+        if len(generated_texts) > 1:
+            return min(generated_texts, key=lambda txt: self.calculate_similarity(generated_texts[0], txt))
+        return generated_texts[-1]
+
+    def calculate_similarity(self, text1, text2):
+        return len(set(text1.split()).intersection(set(text2.split()))) / len(set(text1.split()))
 
     def read_keywords(self, keyword_file):
-        """Чтение файла с ключевыми словами"""
         with open(keyword_file, 'r', encoding='utf-8') as file:
             lines = file.readlines()
-
         keywords = {}
         self.log(f"Reading keywords from file: {keyword_file}")
         for idx, line in enumerate(lines):
@@ -178,21 +137,15 @@ class ArticleGenerator:
             if len(parts) == 2:
                 site = parts[0].strip()
                 keywords_list = [kw.strip() for kw in parts[1].split(',')]
-
-                if site in keywords:
-                    keywords[site].append(keywords_list)
-                else:
-                    keywords[site] = [keywords_list]
+                keywords.setdefault(site, []).append(keywords_list)
             else:
                 self.log(f"Skipping line {idx + 1} due to incorrect format: {line.strip()}")
-
         self.log(f'Parsed {len(keywords)} unique sites with keywords from file.')
         return keywords
 
     def read_prompt(self):
         with open(self.prompt_file, 'r', encoding='utf-8') as file:
-            prompt = file.read().strip()
-        return prompt
+            return file.read().strip()
 
     def next_api_key(self):
         if not self.api_keys:
@@ -201,7 +154,6 @@ class ArticleGenerator:
         self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
         self.log(f'Switching to API key {self.current_key_index}')
         return key
-
 
 
 class ImageDownloaderPix:
