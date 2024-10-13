@@ -4,5 +4,3 @@ requests
 PyQt6
 openai
 pyinstaller
-youtube_transcript_api
-google-api-python-client

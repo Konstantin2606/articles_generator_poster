@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
         self.api_key_file = ''
         self.output_folder = ''
         self.prompt_file = ''
-        self.keyword_file = ''
+        self.text_folder = ''
         self.min_chars = None
         self.pixabay_api_key = ''
         self.num_images = 1
@@ -108,10 +108,10 @@ class MainWindow(QMainWindow):
         self.output_folder_button = QPushButton('Обзор...')
         self.output_folder_button.clicked.connect(self.select_output_folder)
 
-        self.keyword_file_label = QLabel('Файл с ключевыми словами:')
-        self.keyword_file_path = QLineEdit()
-        self.keyword_file_button = QPushButton('Обзор...')
-        self.keyword_file_button.clicked.connect(self.select_keyword_file)
+        self.text_folder_label = QLabel('Папка с текстовыми файлами для генерации:')
+        self.text_folder_path = QLineEdit()
+        self.text_folder_button = QPushButton('Обзор...')
+        self.text_folder_button.clicked.connect(self.select_text_folder)
 
         self.min_chars_label = QLabel('Минимальное количество символов для статьи:')
         self.min_chars_input = QLineEdit()
@@ -161,9 +161,9 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.output_folder_path, 2, 1)
         grid_layout.addWidget(self.output_folder_button, 2, 2)
 
-        grid_layout.addWidget(self.keyword_file_label, 3, 0)
-        grid_layout.addWidget(self.keyword_file_path, 3, 1)
-        grid_layout.addWidget(self.keyword_file_button, 3, 2)
+        grid_layout.addWidget(self.text_folder_label, 3, 0)
+        grid_layout.addWidget(self.text_folder_path, 3, 1)
+        grid_layout.addWidget(self.text_folder_button, 3, 2)
 
         grid_layout.addWidget(self.min_chars_label, 4, 0)
         grid_layout.addWidget(self.min_chars_input, 4, 1)
@@ -220,12 +220,12 @@ class MainWindow(QMainWindow):
             self.log_output.append(f'Выбрана папка для сохранения: {self.output_folder}')
             QApplication.processEvents()
 
-    def select_keyword_file(self):
-        file, _ = QFileDialog.getOpenFileName(self, "Выберите файл с ключевыми словами", "", "Текстовые файлы (*.txt)")
-        if file:
-            self.keyword_file = os.path.relpath(file)
-            self.keyword_file_path.setText(self.keyword_file)
-            self.log_output.append(f'Выбран файл с ключевыми словами: {self.keyword_file}')
+    def select_text_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку с текстовыми файлами")
+        if folder:
+            self.text_folder = os.path.relpath(folder)
+            self.text_folder_path.setText(self.text_folder)
+            self.log_output.append(f'Выбрана папка с текстовыми файлами: {self.text_folder}')
             QApplication.processEvents()
 
     def save_settings(self):
@@ -233,7 +233,7 @@ class MainWindow(QMainWindow):
             'api_key_file': self.api_key_file,
             'output_folder': self.output_folder,
             'prompt_file': self.prompt_file,
-            'keyword_file': self.keyword_file,
+            'text_folder': self.text_folder,  # Сохраняем путь к папке с текстовыми файлами
             'min_chars': self.min_chars_input.text(),
             'model_name': self.model_combo.currentText(),
             'language': self.language_combo.currentText() if self.language_combo.currentText() != 'Custom' else self.language_input.text(),
@@ -256,15 +256,16 @@ class MainWindow(QMainWindow):
                     self.api_key_file = settings.get('api_key_file', '')
                     self.output_folder = settings.get('output_folder', '')
                     self.prompt_file = settings.get('prompt_file', '')
-                    self.keyword_file = settings.get('keyword_file', '')
+                    self.text_folder = settings.get('text_folder', '')  # Загружаем путь к папке с текстовыми файлами
                     self.min_chars = settings.get('min_chars', '')
 
+                    # Устанавливаем значения в соответствующие поля интерфейса
                     self.api_key_path.setText(self.api_key_file)
                     self.output_folder_path.setText(self.output_folder)
                     self.prompt_path.setText(self.prompt_file)
-                    self.keyword_file_path.setText(self.keyword_file)
-                    self.min_chars_input.setText(self.min_chars)
+                    self.text_folder_path.setText(self.text_folder)  # Устанавливаем путь к папке в поле
 
+                    self.min_chars_input.setText(self.min_chars)
                     self.model_combo.setCurrentText(settings.get('model_name', 'gpt-4o-mini'))
                     language = settings.get('language', 'English')
 
@@ -285,9 +286,9 @@ class MainWindow(QMainWindow):
         else:
             self.log_output.append('Файл настроек не найден. Используются настройки по умолчанию.')
             QApplication.processEvents()
-
+            
     def start_process(self):
-        if not self.api_key_file or not self.output_folder or not self.prompt_file or not self.keyword_file or not self.min_chars_input.text() or not self.pixabay_api_key_input.text():
+        if not self.api_key_file or not self.output_folder or not self.prompt_file or not self.text_folder or not self.min_chars_input.text() or not self.pixabay_api_key_input.text():
             self.log_output.append('Пожалуйста, выберите необходимые файлы, папки, введите минимальное количество символов и API ключ для Pixabay')
             return
 
@@ -298,7 +299,8 @@ class MainWindow(QMainWindow):
             pixabay_api_key = self.pixabay_api_key_input.text()
             num_images = int(self.num_images_input.text()) if self.num_images_input.text() else 1
 
-            self.thread = WorkerThread(self.keyword_file, self.api_key_file, self.output_folder, self.prompt_file, min_chars, model_name, language, pixabay_api_key, num_images)
+            # Передаем text_folder вместо keyword_file
+            self.thread = WorkerThread(self.text_folder, self.api_key_file, self.output_folder, self.prompt_file, min_chars, model_name, language, pixabay_api_key, num_images)
             self.thread.log_signal.connect(self.log_output.append)
             self.thread.finished_signal.connect(self.on_process_finished)
             self.thread.start()

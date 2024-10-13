@@ -59,38 +59,43 @@ class ArticleGenerator:
         try:
             self.set_GPT()
             prompt = self.read_prompt()
-            keywords_data = self.read_keywords(self.data_folder)
+            keywords_data = self.read_keywords(self.data_folder)  # Теперь возвращает словарь {название сайта: {название файла: текст}}
             min_required_chars = int(self.min_chars * 0.6)
 
             async with aiohttp.ClientSession() as session:
-                for site, keywords_sets in keywords_data.items():
-                    for keywords in keywords_sets:
-                        self.log(f"Generating article for site '{site}' with keywords: {keywords}")
-                        first_keywords = ' '.join(keywords[:3])
-                        sanitized_keywords = self.sanitize_filename(first_keywords, max_length=30)
+                for site, texts in keywords_data.items():
+                    # Создаем основную папку для сайта
+                    site_folder = os.path.join(self.output_folder, site)
+                    os.makedirs(site_folder, exist_ok=True)
+                    
+                    for text_file_name, text_content in texts.items():
+                        self.log(f"Generating article for site '{site}' with text from file '{text_file_name}'.")
 
-                        site_folder = os.path.join(self.output_folder, site)
-                        os.makedirs(site_folder, exist_ok=True)
+                        # Создаем подпапку для статьи с именем текстового файла внутри папки сайта
+                        article_folder = os.path.join(site_folder, text_file_name)
+                        os.makedirs(article_folder, exist_ok=True)
 
-                        keyword_string = ', '.join(keywords)
-                        prompt_with_keywords = f"{prompt}\nInclude the following keywords: {keyword_string}\nGenerate content according to the following parameters."
+                        # Формируем промпт с текстом из файла
+                        prompt_with_text = f"{prompt}\nUse the following content as a basis for the article:\n\n{text_content}\n\nGenerate content with the specified parameters."
 
                         max_tokens = min(int(self.min_chars / 5), 4096)
-                        formatted_article = self.generate_article_with_retries(prompt_with_keywords, min_required_chars, max_tokens)
+                        formatted_article = self.generate_article_with_retries(prompt_with_text, min_required_chars, max_tokens)
 
                         if formatted_article:
-                            headline_folder = os.path.join(site_folder, sanitized_keywords)
-                            os.makedirs(headline_folder, exist_ok=True)
-
-                            output_file = os.path.join(headline_folder, "article.txt")
+                            # Сохраняем сгенерированную статью в подпапке статьи
+                            output_file = os.path.join(article_folder, "article.txt")
                             with open(output_file, 'w', encoding='utf-8') as file:
                                 file.write(formatted_article)
 
                             self.log(f"Article saved to {output_file}")
-                            await image_downloader.download_random_image(session, keywords, headline_folder)
+
+                            # Скачиваем изображение и сохраняем его в подпапке статьи
+                            await image_downloader.download_random_image(session, [text_file_name], article_folder)
 
         except Exception as e:
             self.log(f"Error generating article: {e}")
+
+
 
     def generate_article_with_retries(self, prompt_with_keywords, min_required_chars, max_tokens, retry_count=2):
         generated_texts = []
@@ -111,11 +116,16 @@ class ArticleGenerator:
             if len(truncated_article) >= min_required_chars:
                 generated_texts.append(truncated_article)
                 self.log(f"Generated article {attempt + 1} meets minimum character requirement: {len(truncated_article)} characters.")
+                # Возвращаем первый успешный результат и пропускаем уникальность
+                return truncated_article
             else:
                 self.log(f"Generated article {attempt + 1} too short, retrying...")
 
-        unique_text = self.get_most_unique_text(generated_texts)
-        return unique_text
+        # Закомментировано на время для тестирования без уникализации текста
+        # unique_text = self.get_most_unique_text(generated_texts)
+        # return unique_text
+        self.log("No article met the character requirement after retries.")
+        return None  # Если ни одна попытка не соответствует требованиям
 
 
     def get_most_unique_text(self, generated_texts):
@@ -126,22 +136,36 @@ class ArticleGenerator:
     def calculate_similarity(self, text1, text2):
         return len(set(text1.split()).intersection(set(text2.split()))) / len(set(text1.split()))
 
-    def read_keywords(self, keyword_file):
-        with open(keyword_file, 'r', encoding='utf-8') as file:
-            lines = file.readlines()
+    def read_keywords(self, base_folder):
+        """
+        Читает текстовые файлы из подпапок, возвращая содержимое с названием файлов.
+        base_folder - папка с подпапками (сайтами), в которых находятся текстовые файлы.
+        """
         keywords = {}
-        self.log(f"Reading keywords from file: {keyword_file}")
-        for idx, line in enumerate(lines):
-            self.log(f"Processing line {idx + 1}: {line.strip()}")
-            parts = line.strip().split('|')
-            if len(parts) == 2:
-                site = parts[0].strip()
-                keywords_list = [kw.strip() for kw in parts[1].split(',')]
-                keywords.setdefault(site, []).append(keywords_list)
-            else:
-                self.log(f"Skipping line {idx + 1} due to incorrect format: {line.strip()}")
-        self.log(f'Parsed {len(keywords)} unique sites with keywords from file.')
+        base_folder = Path(base_folder)
+
+        if not base_folder.exists():
+            raise FileNotFoundError(f"Base folder not found: {base_folder}")
+        
+        self.log(f"Reading text files from folder: {base_folder}")
+
+        for site_folder in base_folder.iterdir():
+            if site_folder.is_dir():  # Проверяем, что это папка
+                site_name = site_folder.name
+                self.log(f"Processing site folder: {site_name}")
+
+                # Обрабатываем каждый текстовый файл
+                texts = {}
+                for text_file in site_folder.glob("*.txt"):
+                    with text_file.open('r', encoding='utf-8') as file:
+                        text_content = file.read().strip()
+                        texts[text_file.stem] = text_content  # Используем stem (имя файла без расширения)
+
+                keywords[site_name] = texts  # Записываем все тексты и имена файлов для сайта
+
+        self.log(f'Parsed {len(keywords)} unique sites with text data from folders.')
         return keywords
+
 
     def read_prompt(self):
         with open(self.prompt_file, 'r', encoding='utf-8') as file:
@@ -319,23 +343,22 @@ class ImageDownloaderPix:
 
 
 
-    async def download_random_image(self, session, keywords, output_folder):
-        """Пытается загрузить изображение для каждого ключевого слова, пока не найдет новое изображение"""
-        if not keywords:
-            self.log_function("No keywords provided, skipping image download.")
+    async def download_random_image(self, session, filenames, output_folder):
+        """
+        Загружает изображение для указанного имени файла, представляющего текст.
+        filenames - список имен файлов для использования в качестве названия картинки.
+        """
+        if not filenames:
+            self.log_function("No filenames provided, skipping image download.")
             return
-        
-        # Пробегаем по каждому ключевому слову
-        for keyword in keywords:
-            self.log_function(f"Trying to download images for keyword: {keyword}")
+
+        for filename in filenames:
+            self.log_function(f"Trying to download images for filename: {filename}")
             
-            # Пытаемся загрузить изображение для ключевого слова
-            success = await self.download_images_for_keyword(session, keyword, output_folder)
+            # Используем имя файла как ключевое слово для изображения
+            success = await self.download_images_for_keyword(session, filename, output_folder)
             
             if success:
-                self.log_function(f"Successfully downloaded an image for keyword: {keyword}")
-                return  # Успешно скачали изображение, выходим из функции
-
-        # Если для всех ключевых слов изображения уже загружены или произошли ошибки
-        self.log_function("All images for all keywords are already downloaded or no suitable images found.")
-
+                self.log_function(f"Successfully downloaded an image for filename: {filename}")
+                return
+        self.log_function("All images for all filenames are already downloaded or no suitable images found.")
